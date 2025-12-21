@@ -11,7 +11,7 @@ type ApiStackProps = StackProps & {
   bucket: s3.Bucket;
   jobsTable: dynamodb.Table;
   apiLambdaRole: iam.Role;
-  // We'll add stateMachineArn later once Step Functions exists
+  stateMachineArn: string;
 };
 
 export class ApiStack extends Stack {
@@ -30,7 +30,7 @@ export class ApiStack extends Stack {
       environment: {
         BUCKET_NAME: props.bucket.bucketName,
         JOBS_TABLE_NAME: props.jobsTable.tableName,
-        // STATE_MACHINE_ARN: "", // add later
+        STATE_MACHINE_ARN: props.stateMachineArn,
       },
       bundling: {
         minify: true,
