@@ -41,11 +41,9 @@ export async function handler(event: any) {
 async function uploadUrl(event: any) {
   const body = event.body ? JSON.parse(event.body) : {};
   const contentType = body.contentType ?? "video/mp4";
-  const liftType = body.liftType ?? null;
 
   // TODO: replace with Cognito user sub later
   const userId = "anon";
-
   const jobId = randomUUID();
   const s3Key = `raw/${userId}/${jobId}.mp4`;
 
@@ -57,7 +55,6 @@ async function uploadUrl(event: any) {
       jobId,
       userId,
       rawS3Key: s3Key,
-      liftType,
       status: "CREATED",
       createdAt: now,
       updatedAt: now,
@@ -78,7 +75,7 @@ async function uploadUrl(event: any) {
 
 async function createJob(event: any) {
   const body = event.body ? JSON.parse(event.body) : {};
-  const jobId = body.jobId;
+  const jobId = String(body.jobId ?? "").trim();
   const liftType = body.liftType;
 
   if (!jobId || !liftType) return resp(400, { message: "jobId and liftType are required" });
