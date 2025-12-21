@@ -4,6 +4,7 @@ import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as iam from "aws-cdk-lib/aws-iam";
+import * as logs from "aws-cdk-lib/aws-logs";
 
 export class BarBuddyStack extends Stack {
   public readonly bucket: s3.Bucket;
@@ -14,6 +15,8 @@ export class BarBuddyStack extends Stack {
   public readonly ecsTaskRole: iam.Role;
   public readonly ecsExecutionRole: iam.Role;
   public readonly stepFunctionsRole: iam.Role;
+
+  public readonly workerLogGroup: logs.LogGroup;
 
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -68,6 +71,10 @@ export class BarBuddyStack extends Stack {
       imageScanOnPush: true,
     });
 
+    this.workerLogGroup = new logs.LogGroup(this, "PoseWorkerLogGroup", {
+      logGroupName: "/ecs/pose-worker",
+      removalPolicy: RemovalPolicy.DESTROY, // RETAIN later for prod
+    });
 
     this.apiLambdaRole = new iam.Role(this, "ApiLambdaRole", {
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
@@ -88,7 +95,6 @@ export class BarBuddyStack extends Stack {
       actions: ["states:StartExecution"],
       resources: ["*"],
     }));
-
 
     this.ecsTaskRole = new iam.Role(this, "EcsTaskRole", {
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),

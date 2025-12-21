@@ -3,12 +3,16 @@ import { DynamoDBDocumentClient, PutCommand, UpdateCommand, GetCommand } from "@
 import { S3Client, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
+import { SFNClient, StartExecutionCommand } from "@aws-sdk/client-sfn";
 
 const BUCKET_NAME = process.env.BUCKET_NAME!;
 const JOBS_TABLE_NAME = process.env.JOBS_TABLE_NAME!;
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
+
+const sfn = new SFNClient({});
+const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN!;
 
 function resp(statusCode: number, body: any) {
   return {
@@ -100,7 +104,22 @@ async function createJob(event: any) {
     ExpressionAttributeValues: { ":s": "UPLOADED", ":lt": liftType, ":u": now },
   }));
 
-  // Next step: Start Step Functions execution here (we’ll add after the state machine exists)
+  const exec = await sfn.send(new StartExecutionCommand({
+    stateMachineArn: STATE_MACHINE_ARN,
+    input: JSON.stringify({
+        jobId,
+        rawS3Key: s3Key,
+        liftType,
+        userId: res.Item.userId ?? "anon",
+    }),
+  }));
+
+  await ddb.send(new UpdateCommand({
+    TableName: JOBS_TABLE_NAME,
+    Key: { jobId },
+    UpdateExpression: "SET executionArn=:e, updatedAt=:u",
+    ExpressionAttributeValues: { ":e": exec.executionArn, ":u": new Date().toISOString() },
+  }));
   return resp(200, { jobId, status: "UPLOADED" });
 }
 
