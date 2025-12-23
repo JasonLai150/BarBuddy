@@ -12,4 +12,4 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 COPY src ./src
 
 ENV PYTHONUNBUFFERED=1
-ENTRYPOINT ["python", "-m", "src.main"]
+ENTRYPOINT ["python", "-m", "src.worker_entry"]
