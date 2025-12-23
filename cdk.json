@@ -11,6 +11,7 @@
       "**/*.js",
       "tsconfig.json",
       "package*.json",
+      "dist"
       "yarn.lock",
       "node_modules",
       "test"
