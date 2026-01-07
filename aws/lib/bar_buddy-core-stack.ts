@@ -1,4 +1,4 @@
-import { Stack, StackProps, RemovalPolicy, Duration } from "aws-cdk-lib";
+import { Stack, StackProps, RemovalPolicy, Duration, CfnOutput } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
@@ -69,6 +69,10 @@ export class BarBuddyStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY, // change to RETAIN for prod
       emptyOnDelete: true,
       imageScanOnPush: true,
+    });
+
+    new CfnOutput(this, "PoseWorkerRepoUri", {
+      value: this.workerRepo.repositoryUri,
     });
 
     this.workerLogGroup = new logs.LogGroup(this, "PoseWorkerLogGroup", {

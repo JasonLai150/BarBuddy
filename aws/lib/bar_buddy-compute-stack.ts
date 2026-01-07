@@ -50,7 +50,7 @@ export class ComputeStack extends Stack {
     });
 
     const container = this.taskDef.addContainer("worker", {
-      image: ecs.ContainerImage.fromEcrRepository(props.workerRepo, "meta"),
+      image: ecs.ContainerImage.fromEcrRepository(props.workerRepo, "latest"),
       logging: ecs.LogDrivers.awsLogs({logGroup: props.workerLogGroup, streamPrefix: "worker",}),
       environment: {
         BUCKET_NAME: props.bucket.bucketName,

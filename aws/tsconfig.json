@@ -27,6 +27,6 @@
   },
   "exclude": [
     "node_modules",
-    "cdk.out"
+    "aws/cdk.out"
   ]
 }

@@ -52,7 +52,10 @@ export class OrchestrationStack extends Stack {
           environment: [
             { name: "JOB_ID", value: sfn.JsonPath.stringAt("$.jobId") },
             { name: "RAW_S3_KEY", value: sfn.JsonPath.stringAt("$.rawS3Key") },
-          ],
+            { name: "LIFT_TYPE", value: sfn.JsonPath.stringAt("$.liftType") },
+            { name: "USER_ID", value: sfn.JsonPath.stringAt("$.userId") },
+            { name: "VIZ", value: "1" }, // optional
+         ],
         },
       ],
       resultPath: sfn.JsonPath.DISCARD,
