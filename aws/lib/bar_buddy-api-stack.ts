@@ -6,12 +6,14 @@ import * as nodeLambda from "aws-cdk-lib/aws-lambda-nodejs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as cognito from "aws-cdk-lib/aws-cognito";
 
 type ApiStackProps = StackProps & {
   bucket: s3.Bucket;
   jobsTable: dynamodb.Table;
   apiLambdaRole: iam.Role;
   stateMachineArn: string;
+  userPoolId: string;
 };
 
 export class ApiStack extends Stack {
@@ -31,6 +33,7 @@ export class ApiStack extends Stack {
         BUCKET_NAME: props.bucket.bucketName,
         JOBS_TABLE_NAME: props.jobsTable.tableName,
         STATE_MACHINE_ARN: props.stateMachineArn,
+        PRESIGN_GET_TTL_SECONDS: "900", // optional but nice
       },
       bundling: {
         minify: true,
@@ -47,17 +50,38 @@ export class ApiStack extends Stack {
       },
     });
 
+    const userPool = cognito.UserPool.fromUserPoolId(
+      this,
+      "ImportedUserPool",
+      props.userPoolId
+    );
+
+    const authorizer = new apigw.CognitoUserPoolsAuthorizer(this, "CognitoAuthorizer", {
+      cognitoUserPools: [userPool],
+    });
+
+    // Apply auth to protected endpoints
+    const auth = {
+      authorizer,
+      authorizationType: apigw.AuthorizationType.COGNITO,
+    };
+
     const jobs = this.api.root.addResource("jobs");
 
-    // POST /upload-url
+    // POST /upload-url (protected)
     const uploadUrl = this.api.root.addResource("upload-url");
-    uploadUrl.addMethod("POST", new apigw.LambdaIntegration(jobManagerFn));
+    uploadUrl.addMethod("POST", new apigw.LambdaIntegration(jobManagerFn), auth);
 
-    // POST /jobs
-    jobs.addMethod("POST", new apigw.LambdaIntegration(jobManagerFn));
+    // POST /jobs (protected)
+    jobs.addMethod("POST", new apigw.LambdaIntegration(jobManagerFn), auth);
 
-    // GET /jobs/{jobId}
+    // GET /jobs/{jobId} (protected)
     const jobById = jobs.addResource("{jobId}");
-    jobById.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn));
+    jobById.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn), auth);
+
+    // GET /jobs/{jobId}/results (protected)
+    const jobResults = jobById.addResource("results");
+    jobResults.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn), auth);
+    
   }
 }

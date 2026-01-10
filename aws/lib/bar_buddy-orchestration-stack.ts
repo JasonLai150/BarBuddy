@@ -54,8 +54,14 @@ export class OrchestrationStack extends Stack {
             { name: "RAW_S3_KEY", value: sfn.JsonPath.stringAt("$.rawS3Key") },
             { name: "LIFT_TYPE", value: sfn.JsonPath.stringAt("$.liftType") },
             { name: "USER_ID", value: sfn.JsonPath.stringAt("$.userId") },
-            { name: "VIZ", value: "1" }, // optional
-         ],
+
+            { name: "RESULT_META_KEY", value: sfn.JsonPath.stringAt("$.results.metaKey") },
+            { name: "RESULT_LANDMARKS_KEY", value: sfn.JsonPath.stringAt("$.results.landmarksKey") },
+            { name: "RESULT_SUMMARY_KEY", value: sfn.JsonPath.stringAt("$.results.summaryKey") },
+            { name: "RESULT_VIZ_KEY", value: sfn.JsonPath.stringAt("$.results.vizKey") },
+
+            { name: "VIZ", value: "1" },
+          ],
         },
       ],
       resultPath: sfn.JsonPath.DISCARD,
@@ -87,20 +93,21 @@ export class OrchestrationStack extends Stack {
       expressionAttributeValues: {
         ":s": tasks.DynamoAttributeValue.fromString("ERROR"),
         ":u": tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt("$.now")),
-        ":e": tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt("$.error")),
+        ":e": tasks.DynamoAttributeValue.fromString(sfn.JsonPath.stringAt("$.error.Cause")),
       },
       resultPath: sfn.JsonPath.DISCARD,
     });
 
     // Add a Pass state to inject "now" timestamp once (cheap + consistent)
     const addNow = new sfn.Pass(this, "AddNowTimestamp", {
-        parameters: {
-            "jobId.$": "$.jobId",
-            "rawS3Key.$": "$.rawS3Key",
-            "liftType.$": "$.liftType",
-            "userId.$": "$.userId",
-            "now.$": "$$.State.EnteredTime",
-        },
+      parameters: {
+        "jobId.$": "$.jobId",
+        "rawS3Key.$": "$.rawS3Key",
+        "liftType.$": "$.liftType",
+        "userId.$": "$.userId",
+        "results.$": "$.results",          // ✅ keep results object
+        "now.$": "$$.State.EnteredTime",
+      },
     });
 
     // ---- TRY chain ----
