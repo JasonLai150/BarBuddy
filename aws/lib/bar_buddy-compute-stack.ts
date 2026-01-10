@@ -29,6 +29,7 @@ export class ComputeStack extends Stack {
     // VPC for Fargate (CDK creates a simple one; good for beta)
     this.vpc = new ec2.Vpc(this, "WorkerVpc", {
       maxAzs: 2,
+      //TODO: look into whether nat is neeeded
       natGateways: 1, // costs $, but simplifies outbound access to AWS APIs
     });
 
@@ -51,11 +52,13 @@ export class ComputeStack extends Stack {
 
     const container = this.taskDef.addContainer("worker", {
       image: ecs.ContainerImage.fromEcrRepository(props.workerRepo, "latest"),
-      logging: ecs.LogDrivers.awsLogs({logGroup: props.workerLogGroup, streamPrefix: "worker",}),
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: props.workerLogGroup,
+        streamPrefix: "worker",
+      }),
       environment: {
         BUCKET_NAME: props.bucket.bucketName,
         JOBS_TABLE_NAME: props.jobsTable.tableName,
-        // JOB_ID and RAW_S3_KEY will be injected at run-time per job
       },
     });
 

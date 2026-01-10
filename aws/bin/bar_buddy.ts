@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as cdk from 'aws-cdk-lib/core';
+import * as cognito from "aws-cdk-lib/aws-cognito";
 import { BarBuddyStack } from '../lib/bar_buddy-core-stack';
 import { ApiStack } from '../lib/bar_buddy-api-stack';
 import { ComputeStack } from "../lib/bar_buddy-compute-stack";
@@ -53,4 +54,5 @@ const api = new ApiStack(app, "BarBuddyApiStack", {
   jobsTable: core.jobsTable,
   apiLambdaRole: core.apiLambdaRole,
   stateMachineArn: orchestration.stateMachine.stateMachineArn,
+  userPoolId: "us-east-1_0WHxHJ2Lf",
 });
