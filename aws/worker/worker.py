@@ -1,48 +1,41 @@
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
 
-
 def iso_now():
     return datetime.now(timezone.utc).isoformat()
 
-
-def must_env(name: str) -> str:
-    val = os.environ.get(name)
-    if not val:
-        raise RuntimeError(f"Missing required env var: {name}")
-    return val
-
+##################################
+#NOTE: This is a skeleton worker that only writes a meta.json file to S3 and updates DynamoDB.
+###################################
 
 def main():
-    job_id = must_env("JOB_ID")
-    bucket = must_env("BUCKET_NAME")
-    raw_key = must_env("RAW_S3_KEY")
-    table = must_env("JOBS_TABLE_NAME")
-
-    # ✅ Explicit output keys (no prefix construction)
-    meta_key = must_env("RESULT_META_KEY")
-    landmarks_key = must_env("RESULT_LANDMARKS_KEY")
-    summary_key = must_env("RESULT_SUMMARY_KEY")
-    viz_key = must_env("RESULT_VIZ_KEY")
+    job_id = os.environ["JOB_ID"]
+    bucket = os.environ["BUCKET_NAME"]
+    raw_key = os.environ["RAW_S3_KEY"]
+    table = os.environ["JOBS_TABLE_NAME"]
 
     s3 = boto3.client("s3")
     ddb = boto3.client("dynamodb")
 
-    # 1) Validate raw upload exists
+    # 1) Validate raw video exists + fetch metadata
     try:
         head = s3.head_object(Bucket=bucket, Key=raw_key)
     except ClientError as e:
         msg = f"head_object failed: {e}"
         print(msg)
+        # Mark ERROR in DynamoDB
         ddb.update_item(
             TableName=table,
             Key={"jobId": {"S": job_id}},
-            UpdateExpression="SET updatedAt=:u, errorMessage=:e",
+            UpdateExpression="SET #s=:s, updatedAt=:u, errorMessage=:e",
+            ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
+                ":s": {"S": "ERROR"},
                 ":u": {"S": iso_now()},
                 ":e": {"S": msg},
             },
@@ -57,63 +50,32 @@ def main():
         "etag": head.get("ETag"),
         "lastModified": head.get("LastModified").isoformat() if head.get("LastModified") else None,
         "generatedAt": iso_now(),
-        "note": "Skeleton worker meta.json (no pose yet).",
+        "note": "Skeleton worker meta.json (no pose yet)."
     }
 
-    # 2) Write meta.json to explicit key
+    # 2) Write results/{jobId}/meta.json
+    result_key = f"results/{job_id}/meta.json"
     s3.put_object(
         Bucket=bucket,
-        Key=meta_key,
+        Key=result_key,
         Body=(json.dumps(meta, indent=2) + "\n").encode("utf-8"),
         ContentType="application/json",
     )
 
-    # 3) Placeholder writes showing explicit-key usage
-    # Replace with your real outputs later.
-    s3.put_object(
-        Bucket=bucket,
-        Key=landmarks_key,
-        Body=b"{}",
-        ContentType="application/json",
-    )
-
-    s3.put_object(
-        Bucket=bucket,
-        Key=summary_key,
-        Body=b"{}",
-        ContentType="application/json",
-    )
-
-    # If you don't produce a viz yet, you can skip this write
-    # or only write it when VIZ=1 and you actually have bytes.
-    if os.environ.get("VIZ") == "1":
-        s3.put_object(
-            Bucket=bucket,
-            Key=viz_key,
-            Body=b"",  # replace with actual mp4 bytes
-            ContentType="video/mp4",
-        )
-
-    # 4) Update DynamoDB pointers (no status mutation)
+    # 3) Update DynamoDB with result pointer
     ddb.update_item(
         TableName=table,
         Key={"jobId": {"S": job_id}},
-        UpdateExpression="SET updatedAt=:u, resultMetaKey=:mk, resultLandmarksKey=:lk, resultSummaryKey=:sk, resultVizKey=:vk",
+        UpdateExpression="SET #s=:s, updatedAt=:u, resultMetaKey=:rk",
+        ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={
+            ":s": {"S": "WORKER_DONE"},
             ":u": {"S": iso_now()},
-            ":mk": {"S": meta_key},
-            ":lk": {"S": landmarks_key},
-            ":sk": {"S": summary_key},
-            ":vk": {"S": viz_key},
+            ":rk": {"S": result_key},
         },
     )
 
-    print("Worker complete")
-    print(f"  meta: s3://{bucket}/{meta_key}")
-    print(f"  landmarks: s3://{bucket}/{landmarks_key}")
-    print(f"  summary: s3://{bucket}/{summary_key}")
-    print(f"  viz: s3://{bucket}/{viz_key}")
-
+    print(f"Done. Wrote s3://{bucket}/{result_key}")
 
 if __name__ == "__main__":
     main()
