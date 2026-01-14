@@ -75,6 +75,9 @@ export class ApiStack extends Stack {
     // POST /jobs (protected)
     jobs.addMethod("POST", new apigw.LambdaIntegration(jobManagerFn), auth);
 
+    // GET /jobs (protected) - list all user's jobs
+    jobs.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn), auth);
+
     // GET /jobs/{jobId} (protected)
     const jobById = jobs.addResource("{jobId}");
     jobById.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn), auth);

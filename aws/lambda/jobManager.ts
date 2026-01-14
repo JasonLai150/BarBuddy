@@ -1,5 +1,5 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand, GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { S3Client, HeadObjectCommand, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
@@ -55,6 +55,7 @@ export async function handler(event: any) {
   try {
     if (method === "POST" && resource === "/upload-url") return await uploadUrl(event);
     if (method === "POST" && resource === "/jobs") return await createJob(event);
+    if (method === "GET" && resource === "/jobs") return await getJobsList(event);
     if (method === "GET" && resource === "/jobs/{jobId}") return await getJob(event);
     if (method === "GET" && resource === "/jobs/{jobId}/results") return await getJobResults(event);
 
@@ -201,6 +202,67 @@ async function getJob(event: any) {
   if (err) return err;
 
   return resp(200, job);
+}
+
+async function getJobsList(event: any) {
+  const userSub = requireUserSub(event);
+
+  const queryParams = event.queryStringParameters ?? {};
+  let nextToken = queryParams.nextToken;
+  const pageSize = 20;
+
+  let exclusiveStartKey: any = undefined;
+  if (nextToken) {
+    try {
+      const decoded = Buffer.from(nextToken, "base64").toString("utf-8");
+      exclusiveStartKey = JSON.parse(decoded);
+    } catch {
+      return resp(400, { message: "Invalid nextToken" });
+    }
+  }
+
+  try {
+    const queryResult = await ddb.send(
+      new QueryCommand({
+        TableName: JOBS_TABLE_NAME,
+        IndexName: "ByUser",
+        KeyConditionExpression: "userId = :uid",
+        ExpressionAttributeValues: { ":uid": userSub },
+        ScanIndexForward: false, // newest first
+        Limit: pageSize,
+        ExclusiveStartKey: exclusiveStartKey,
+        ProjectionExpression: "jobId, userId, liftType, #s, createdAt, updatedAt, resultMetaKey, resultLandmarksKey, resultSummaryKey, resultVizKey",
+        ExpressionAttributeNames: { "#s": "status" },
+      })
+    );
+
+    const jobs = (queryResult.Items ?? []).map((item: any) => ({
+      jobId: item.jobId,
+      userId: item.userId,
+      liftType: item.liftType ?? null,
+      status: item.status ?? null,
+      createdAt: item.createdAt ?? null,
+      updatedAt: item.updatedAt ?? null,
+      resultMetaKey: item.resultMetaKey ?? null,
+      resultLandmarksKey: item.resultLandmarksKey ?? null,
+      resultSummaryKey: item.resultSummaryKey ?? null,
+      resultVizKey: item.resultVizKey ?? null,
+    }));
+
+    let newNextToken: string | undefined;
+    if (queryResult.LastEvaluatedKey) {
+      const encoded = Buffer.from(JSON.stringify(queryResult.LastEvaluatedKey)).toString("base64");
+      newNextToken = encoded;
+    }
+
+    return resp(200, {
+      jobs,
+      nextToken: newNextToken ?? null,
+    });
+  } catch (e: any) {
+    console.error("Error querying jobs", e);
+    throw e;
+  }
 }
 
 async function getJobResults(event: any) {
