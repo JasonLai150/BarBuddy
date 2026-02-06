@@ -1,5 +1,28 @@
-mediapipe==0.10.14
-opencv-python-headless==4.10.0.84
-numpy==1.26.4
-orjson==3.10.7
-boto3==1.28.44
+# BarBuddy 3D Pose Pipeline v2 — dependencies
+#
+# Core ML
+torch>=2.1.0
+torchvision>=0.16.0
+numpy>=1.24.0,<2.0.0
+scipy>=1.11.0
+
+# Stage 1 — Person Detection (YOLOv8)
+ultralytics>=8.0.146
+
+# Stage 2 — 2D Pose (RTMPose via ONNX Runtime)
+onnxruntime-gpu>=1.16.0     # swap to `onnxruntime` for CPU-only builds
+
+# Stage 3 — 3D Lifter (VideoPose3D uses PyTorch — already listed above)
+
+# Stage 4 — Post-processing
+# (scipy already listed)
+
+# Video / image processing
+opencv-python-headless>=4.8.0
+orjson>=3.9.0
+
+# AWS integration
+boto3>=1.28.0
+
+# Misc
+tqdm>=4.65.0
