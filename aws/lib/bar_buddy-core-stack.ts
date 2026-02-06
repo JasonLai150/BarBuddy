@@ -63,7 +63,7 @@ export class BarBuddyStack extends Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // ECR repo for your worker container image (ffmpeg + mediapipe etc.)
+    // ECR repo for your worker container image (ffmpeg + YOLOv8 + RTMPose + VideoPose3D)
     this.workerRepo = new ecr.Repository(this, "PoseWorkerRepo", {
       repositoryName: "pose-worker",
       removalPolicy: RemovalPolicy.DESTROY, // change to RETAIN for prod
