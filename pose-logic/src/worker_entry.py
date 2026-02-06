@@ -39,11 +39,19 @@ def main():
     sample_fps = os.environ.get("SAMPLE_FPS", "12")
     max_dim = os.environ.get("MAX_DIM", "720")
     max_frames = os.environ.get("MAX_FRAMES", "360")
-    model_complexity = os.environ.get("MODEL_COMPLEXITY", "1")
     min_det = os.environ.get("MIN_DET", "0.5")
-    min_trk = os.environ.get("MIN_TRK", "0.5")
+    min_trk = os.environ.get("MIN_TRK", "0.3")
+    pose_backend = os.environ.get("POSE_BACKEND", "rtmpose")
     viz = os.environ.get("VIZ", "0") in ("1", "true", "True", "yes")
     viz_fps = os.environ.get("VIZ_FPS", "24")
+
+    # Auto-detect device (CUDA if available, else CPU)
+    try:
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    except ImportError:
+        device = "cpu"
+    print(f" device: {device}")
 
     s3 = boto3.client("s3")
     ddb = boto3.client("dynamodb")
@@ -72,7 +80,7 @@ def main():
     # Download raw video
     s3.download_file(bucket, raw_key, in_path)
 
-    # Run your teammate's module
+    # Run the 3-stage 3D pose pipeline
     cmd = [
         "python", "-m", "src.main",
         "--input", in_path,
@@ -83,9 +91,10 @@ def main():
         "--sample-fps", str(sample_fps),
         "--max-dim", str(max_dim),
         "--max-frames", str(max_frames),
-        "--model-complexity", str(model_complexity),
         "--min-det", str(min_det),
         "--min-trk", str(min_trk),
+        "--pose-backend", pose_backend,
+        "--device", device,
     ]
     if viz:
         cmd += ["--viz", "--viz-fps", str(viz_fps)]
