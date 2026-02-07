@@ -44,8 +44,8 @@ export class ComputeStack extends Stack {
     });
 
     this.taskDef = new ecs.FargateTaskDefinition(this, "PoseWorkerTaskDef", {
-      cpu: 1024, // 1 vCPU
-      memoryLimitMiB: 2048, // 2 GB
+      cpu: 2048, // 2 vCPU
+      memoryLimitMiB: 8192, // 8 GB
       taskRole: props.ecsTaskRole,
       executionRole: props.ecsExecutionRole,
     });

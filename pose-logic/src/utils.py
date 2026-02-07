@@ -303,15 +303,21 @@ def draw_skeleton_on_frame(
     keypoints: list[dict] | None,
     skeleton: list[tuple[int, int]] = COCO_SKELETON,
     conf_threshold: float = 0.3,
+    highlight_segments: list[tuple[int, int]] | None = None,
+    is_valid: bool = False,
 ) -> np.ndarray:
     """
-    Draw 2D/3D skeleton on image.
+    Draw 2D/3D skeleton on image with optional colour-coded highlights.
 
     Args:
         img: BGR image (H, W, 3)
         keypoints: list of dicts with keys {idx, x, y, conf} where x, y are normalised [0,1]
         skeleton: pairs of keypoint indices to connect
         conf_threshold: minimum confidence to draw
+        highlight_segments: list of (a, b) keypoint-index pairs to colour-code.
+                            These segments are drawn bright green when *is_valid*
+                            is True, or orange when False.
+        is_valid: whether the current frame is in a "valid" lift position
 
     Returns:
         img with skeleton drawn (modified in-place)
@@ -320,9 +326,26 @@ def draw_skeleton_on_frame(
         return img
 
     h, w = img.shape[:2]
+    highlight_set = set(highlight_segments) if highlight_segments else set()
+
+    # Also build the reverse so (b, a) matches too
+    if highlight_segments:
+        for a, b in highlight_segments:
+            highlight_set.add((b, a))
+
+    # Highlight colours (BGR)
+    VALID_COLOR = (0, 255, 0)     # bright green
+    INVALID_COLOR = (0, 165, 255) # orange
+    highlight_color = VALID_COLOR if is_valid else INVALID_COLOR
 
     # Build a lookup: idx → (px, py, conf)
     kpt_map: dict[int, tuple[int, int, float]] = {}
+    highlight_kpt_idxs: set[int] = set()
+    if highlight_segments:
+        for a, b in highlight_segments:
+            highlight_kpt_idxs.add(a)
+            highlight_kpt_idxs.add(b)
+
     for kpt in keypoints:
         if kpt["conf"] < conf_threshold:
             continue
@@ -336,12 +359,23 @@ def draw_skeleton_on_frame(
             continue
         ax, ay, ac = kpt_map[a]
         bx, by, bc = kpt_map[b]
-        colour = _conf_to_color(min(ac, bc))
-        cv2.line(img, (ax, ay), (bx, by), colour, 2)
+
+        if (a, b) in highlight_set:
+            colour = highlight_color
+            thickness = 3
+        else:
+            colour = _conf_to_color(min(ac, bc))
+            thickness = 2
+        cv2.line(img, (ax, ay), (bx, by), colour, thickness)
 
     # Draw keypoints
     for idx, (px, py, conf) in kpt_map.items():
-        colour = _conf_to_color(conf)
-        cv2.circle(img, (px, py), 4, colour, -1)
+        if idx in highlight_kpt_idxs:
+            colour = highlight_color
+            radius = 5
+        else:
+            colour = _conf_to_color(conf)
+            radius = 4
+        cv2.circle(img, (px, py), radius, colour, -1)
 
     return img
