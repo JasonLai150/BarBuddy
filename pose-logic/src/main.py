@@ -36,7 +36,7 @@ from src.stage1_detector import PersonDetector
 from src.stage2_pose import PoseEstimator2D
 from src.stage3_lifter import Lifter3D
 from src.postprocess import smooth_and_constrain
-from src.metrics import compute_rep_metrics
+from src.metrics import compute_rep_metrics, LIFT_HIGHLIGHT_SEGMENTS
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +47,11 @@ def draw_viz(
     frames_3d: list[dict],
     out_mp4: str,
     viz_fps: int,
+    lift_type: str = "unknown",
+    per_frame_valid: list[bool] | None = None,
+    rep_count: int = 0,
 ) -> None:
-    """Draw 3D-aware skeleton overlay and encode as mp4."""
+    """Draw 3D-aware skeleton overlay with colour-coded lift highlights."""
     os.makedirs(os.path.dirname(out_mp4) or ".", exist_ok=True)
     tmp_dir = os.path.join(os.path.dirname(out_mp4) or ".", "_viz_frames")
     os.makedirs(tmp_dir, exist_ok=True)
@@ -56,23 +59,65 @@ def draw_viz(
     frame_paths = sorted(glob.glob(os.path.join(frames_dir, "frame_*.png")))
     n = min(len(frame_paths), len(frames_3d))
 
+    highlight_segs = LIFT_HIGHLIGHT_SEGMENTS.get(lift_type)
+    if per_frame_valid is None:
+        per_frame_valid = [False] * n
+
+    running_reps = 0  # count reps completed so far for the HUD
+    prev_valid = False
+    was_in_rep = False
+
     for i in range(n):
         img = cv2.imread(frame_paths[i])
         if img is None:
             continue
 
-        lms = frames_3d[i].get("landmarks")
-        draw_skeleton_on_frame(img, lms, COCO_SKELETON, conf_threshold=0.3)
+        is_valid = per_frame_valid[i] if i < len(per_frame_valid) else False
 
-        # Overlay frame info
+        # Track running rep count for HUD
+        if prev_valid and not is_valid and was_in_rep:
+            running_reps += 1
+        if is_valid:
+            was_in_rep = True
+        if not is_valid and not prev_valid:
+            was_in_rep = False
+        prev_valid = is_valid
+
+        lms = frames_3d[i].get("landmarks")
+        draw_skeleton_on_frame(
+            img, lms, COCO_SKELETON,
+            conf_threshold=0.3,
+            highlight_segments=highlight_segs,
+            is_valid=is_valid,
+        )
+
+        # HUD: timestamp, confidence, rep count, valid indicator
         t = frames_3d[i].get("t", 0.0)
         conf = frames_3d[i].get("confidence", 0.0)
+        h_img, w_img = img.shape[:2]
+
+        # Top-left: time + confidence
         cv2.putText(
-            img,
-            f"t={t:.2f}s  conf={conf:.2f}",
-            (10, 25),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2,
+            img, f"t={t:.2f}s  conf={conf:.2f}",
+            (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2,
         )
+
+        # Top-right: rep counter
+        rep_text = f"Reps: {running_reps}/{rep_count}"
+        (tw, _), _ = cv2.getTextSize(rep_text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.putText(
+            img, rep_text,
+            (w_img - tw - 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+            (0, 255, 0), 2,
+        )
+
+        # Valid state indicator
+        if is_valid:
+            cv2.putText(
+                img, "VALID",
+                (10, h_img - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                (0, 255, 0), 2,
+            )
 
         out_png = os.path.join(tmp_dir, f"viz_{i:06d}.png")
         cv2.imwrite(out_png, img)
@@ -331,7 +376,12 @@ def main():
     # viz.mp4 (optional)
     if args.viz:
         print(f"\n[VIZ] Drawing skeleton overlay …")
-        draw_viz(frames_dir, frames_3d_smooth, viz_path, args.viz_fps)
+        draw_viz(
+            frames_dir, frames_3d_smooth, viz_path, args.viz_fps,
+            lift_type=args.lift_type,
+            per_frame_valid=rep_metrics.get("perFrameValid"),
+            rep_count=rep_metrics["reps"],
+        )
         print(f"  Wrote: {viz_path}")
 
     # summary.json — compact results for frontend
