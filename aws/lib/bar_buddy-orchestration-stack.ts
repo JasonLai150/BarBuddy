@@ -130,7 +130,7 @@ export class OrchestrationStack extends Stack {
     this.stateMachine = new sfn.StateMachine(this, "LiftProcessingStateMachine", {
         stateMachineName: "lift-processing",
         definitionBody: sfn.DefinitionBody.fromChainable(definition),
-        timeout: Duration.minutes(5),
+        timeout: Duration.minutes(15),
     });
   }
 }

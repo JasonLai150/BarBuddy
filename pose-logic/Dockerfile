@@ -25,32 +25,10 @@ RUN mkdir -p $BARBUDDY_MODEL_CACHE
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8m.pt')"
 
 # RTMPose-m ONNX — 2D pose estimation (Stage 2)
-RUN python -c "
-import urllib.request, zipfile, os
-cache = os.environ['BARBUDDY_MODEL_CACHE']
-url = 'https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip'
-zip_path = os.path.join(cache, 'rtmpose-m.zip')
-urllib.request.urlretrieve(url, zip_path)
-with zipfile.ZipFile(zip_path, 'r') as zf:
-    onnx = [m for m in zf.namelist() if m.endswith('.onnx')][0]
-    zf.extract(onnx, cache)
-    extracted = os.path.join(cache, onnx)
-    target = os.path.join(cache, 'rtmpose-m.onnx')
-    if extracted != target:
-        os.rename(extracted, target)
-os.remove(zip_path)
-print('RTMPose ONNX:', target)
-"
+RUN python -c "import urllib.request, zipfile, os; cache = os.environ['BARBUDDY_MODEL_CACHE']; url = 'https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.zip'; zip_path = os.path.join(cache, 'rtmpose-m.zip'); urllib.request.urlretrieve(url, zip_path); zf = zipfile.ZipFile(zip_path); onnx = [m for m in zf.namelist() if m.endswith('.onnx')][0]; zf.extract(onnx, cache); extracted = os.path.join(cache, onnx); target = os.path.join(cache, 'rtmpose-m.onnx'); (extracted != target) and os.rename(extracted, target); zf.close(); os.remove(zip_path); print('RTMPose ONNX:', target)"
 
 # VideoPose3D — temporal 3D lifter (Stage 3)
-RUN python -c "
-import urllib.request, os
-cache = os.environ['BARBUDDY_MODEL_CACHE']
-url = 'https://dl.fbaipublicfiles.com/video-pose-3d/pretrained_h36m_detectron_coco.bin'
-out = os.path.join(cache, 'videopose3d_h36m_cpn.bin')
-urllib.request.urlretrieve(url, out)
-print('VideoPose3D:', out)
-"
+RUN python -c "import urllib.request, os; cache = os.environ['BARBUDDY_MODEL_CACHE']; url = 'https://dl.fbaipublicfiles.com/video-pose-3d/pretrained_h36m_detectron_coco.bin'; out = os.path.join(cache, 'videopose3d_h36m_cpn.bin'); urllib.request.urlretrieve(url, out); print('VideoPose3D:', out)"
 
 COPY src ./src
 
