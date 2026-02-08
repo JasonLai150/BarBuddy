@@ -26,11 +26,17 @@ export class ComputeStack extends Stack {
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
 
-    // VPC for Fargate (CDK creates a simple one; good for beta)
+    // VPC for Fargate — public subnets only, no NAT needed
     this.vpc = new ec2.Vpc(this, "WorkerVpc", {
       maxAzs: 2,
-      //TODO: look into whether nat is neeeded
-      natGateways: 1, // costs $, but simplifies outbound access to AWS APIs
+      natGateways: 0,
+      subnetConfiguration: [
+        {
+          name: "Public",
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+      ],
     });
 
     this.taskSecurityGroup = new ec2.SecurityGroup(this, "WorkerTaskSg", {
