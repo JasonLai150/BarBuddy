@@ -3,17 +3,17 @@ import { DynamoDBDocumentClient, PutCommand, UpdateCommand, GetCommand, QueryCom
 import { S3Client, HeadObjectCommand, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
-import { SFNClient, StartExecutionCommand } from "@aws-sdk/client-sfn";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 
 const BUCKET_NAME = process.env.BUCKET_NAME!;
 const JOBS_TABLE_NAME = process.env.JOBS_TABLE_NAME!;
-const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN!;
+const JOB_QUEUE_URL = process.env.JOB_QUEUE_URL!;
 const PRESIGN_GET_TTL_SECONDS = Number(process.env.PRESIGN_GET_TTL_SECONDS ?? "900"); // 15 min
 const PRESIGN_PUT_TTL_SECONDS = Number(process.env.PRESIGN_PUT_TTL_SECONDS ?? "600"); // 10 min
 
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}));
 const s3 = new S3Client({});
-const sfn = new SFNClient({});
+const sqsClient = new SQSClient({});
 
 function resp(statusCode: number, body: any) {
   return {
@@ -35,6 +35,37 @@ function requireUserSub(event: any): string {
 }
 
 const ALLOW_LEGACY_ANON = (process.env.ALLOW_LEGACY_ANON ?? "false").toLowerCase() === "true";
+const JOB_TIMEOUT_MINUTES = Number(process.env.JOB_TIMEOUT_MINUTES ?? "15");
+
+/**
+ * Check if a job is stuck in QUEUED or PROCESSING for too long.
+ * If so, auto-mark it TIMED_OUT so the client gets a clear signal.
+ */
+async function expireIfStale(job: any): Promise<any> {
+  const status = job.status;
+  if (status !== "QUEUED" && status !== "PROCESSING") return job;
+
+  const updatedAt = job.updatedAt ? new Date(job.updatedAt).getTime() : 0;
+  const ageMs = Date.now() - updatedAt;
+  if (ageMs < JOB_TIMEOUT_MINUTES * 60 * 1000) return job;
+
+  const now = new Date().toISOString();
+  await ddb.send(
+    new UpdateCommand({
+      TableName: JOBS_TABLE_NAME,
+      Key: { jobId: job.jobId },
+      UpdateExpression: "SET #s=:s, updatedAt=:u, errorMessage=:e",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: {
+        ":s": "TIMED_OUT",
+        ":u": now,
+        ":e": `Job timed out after ${JOB_TIMEOUT_MINUTES} minutes in ${status} state`,
+      },
+    })
+  );
+
+  return { ...job, status: "TIMED_OUT", updatedAt: now };
+}
 
 async function getJobOwned(jobId: string, userSub: string) {
   const res = await ddb.send(new GetCommand({ TableName: JOBS_TABLE_NAME, Key: { jobId } }));
@@ -45,7 +76,9 @@ async function getJobOwned(jobId: string, userSub: string) {
   const isOwner = owner === userSub || (ALLOW_LEGACY_ANON && owner === "anon");
   if (!isOwner) return { job: null as any, err: resp(403, { message: "Forbidden" }) };
 
-  return { job, err: null as any };
+  // Auto-expire stale jobs on read
+  const checkedJob = await expireIfStale(job);
+  return { job: checkedJob, err: null as any };
 }
 
 export async function handler(event: any) {
@@ -153,16 +186,15 @@ async function createJob(event: any) {
     })
   );
 
-  // ✅ Pass results prefix + keys into Step Functions
-  const resultsPrefix = job.resultsPrefix ?? `results/${job.userId}/${jobId}/`;
-  const exec = await sfn.send(
-    new StartExecutionCommand({
-      stateMachineArn: STATE_MACHINE_ARN,
-      input: JSON.stringify({
+  // Send job to SQS queue for worker to pick up
+  await sqsClient.send(
+    new SendMessageCommand({
+      QueueUrl: JOB_QUEUE_URL,
+      MessageBody: JSON.stringify({
         jobId,
         rawS3Key,
         liftType,
-        userId: job.userId, // sub
+        userId: job.userId,
         results: {
           metaKey: job.resultMetaKey,
           landmarksKey: job.resultLandmarksKey,
@@ -170,19 +202,22 @@ async function createJob(event: any) {
           vizKey: job.resultVizKey,
         },
       }),
+      MessageGroupId: undefined, // standard queue, not FIFO
     })
   );
 
+  // Update status to QUEUED
   await ddb.send(
     new UpdateCommand({
       TableName: JOBS_TABLE_NAME,
       Key: { jobId },
-      UpdateExpression: "SET executionArn=:e, updatedAt=:u",
-      ExpressionAttributeValues: { ":e": exec.executionArn, ":u": new Date().toISOString() },
+      UpdateExpression: "SET #s=:s, updatedAt=:u",
+      ExpressionAttributeNames: { "#s": "status" },
+      ExpressionAttributeValues: { ":s": "QUEUED", ":u": new Date().toISOString() },
     })
   );
 
-  return resp(200, { jobId, status: "UPLOADED" });
+  return resp(200, { jobId, status: "QUEUED" });
 }
 
 async function getJob(event: any) {
@@ -236,7 +271,12 @@ async function getJobsList(event: any) {
       })
     );
 
-    const jobs = (queryResult.Items ?? []).map((item: any) => ({
+    // Auto-expire any stale QUEUED/PROCESSING jobs on read
+    const checkedItems = await Promise.all(
+      (queryResult.Items ?? []).map((item: any) => expireIfStale(item))
+    );
+
+    const jobs = checkedItems.map((item: any) => ({
       jobId: item.jobId,
       userId: item.userId,
       liftType: item.liftType ?? null,

@@ -14,8 +14,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python deps (layer-cached; put before COPY src)
+# Install PyTorch for CUDA 11.8 first (from PyTorch index) to avoid pulling
+# massive redundant CUDA 12.x wheels from PyPI
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+      torch==2.1.2+cu118 torchvision==0.16.2+cu118 \
+      --index-url https://download.pytorch.org/whl/cu118 && \
+    pip install --no-cache-dir onnxruntime-gpu==1.16.3
+
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Pre-download all model weights into the image so first run has zero cold-start
 ENV BARBUDDY_MODEL_CACHE=/root/.cache/barbuddy/models

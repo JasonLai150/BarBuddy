@@ -6,13 +6,14 @@ import * as nodeLambda from "aws-cdk-lib/aws-lambda-nodejs";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 
 type ApiStackProps = StackProps & {
   bucket: s3.Bucket;
   jobsTable: dynamodb.Table;
+  jobQueue: sqs.Queue;
   apiLambdaRole: iam.Role;
-  stateMachineArn: string;
   userPoolId: string;
 };
 
@@ -32,8 +33,8 @@ export class ApiStack extends Stack {
       environment: {
         BUCKET_NAME: props.bucket.bucketName,
         JOBS_TABLE_NAME: props.jobsTable.tableName,
-        STATE_MACHINE_ARN: props.stateMachineArn,
-        PRESIGN_GET_TTL_SECONDS: "900", // optional but nice
+        JOB_QUEUE_URL: props.jobQueue.queueUrl,
+        PRESIGN_GET_TTL_SECONDS: "900",
       },
       bundling: {
         minify: true,
@@ -44,7 +45,7 @@ export class ApiStack extends Stack {
     this.api = new apigw.RestApi(this, "BarBuddyApi", {
       restApiName: "barbuddy-job-api",
       defaultCorsPreflightOptions: {
-        allowOrigins: apigw.Cors.ALL_ORIGINS, // tighten later
+        allowOrigins: apigw.Cors.ALL_ORIGINS,
         allowMethods: ["GET", "POST", "OPTIONS"],
         allowHeaders: ["Content-Type", "Authorization"],
       },
@@ -60,7 +61,6 @@ export class ApiStack extends Stack {
       cognitoUserPools: [userPool],
     });
 
-    // Apply auth to protected endpoints
     const auth = {
       authorizer,
       authorizationType: apigw.AuthorizationType.COGNITO,
@@ -75,7 +75,7 @@ export class ApiStack extends Stack {
     // POST /jobs (protected)
     jobs.addMethod("POST", new apigw.LambdaIntegration(jobManagerFn), auth);
 
-    // GET /jobs (protected) - list all user's jobs
+    // GET /jobs (protected)
     jobs.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn), auth);
 
     // GET /jobs/{jobId} (protected)
@@ -85,6 +85,5 @@ export class ApiStack extends Stack {
     // GET /jobs/{jobId}/results (protected)
     const jobResults = jobById.addResource("results");
     jobResults.addMethod("GET", new apigw.LambdaIntegration(jobManagerFn), auth);
-    
   }
 }

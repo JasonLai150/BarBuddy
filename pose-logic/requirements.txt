@@ -1,8 +1,9 @@
 # BarBuddy 3D Pose Pipeline v2 — dependencies
 #
 # Core ML
-torch>=2.1.0
-torchvision>=0.16.0
+# torch and torchvision are installed separately in Dockerfile (CUDA 11.8 wheels)
+# torch>=2.1.0
+# torchvision>=0.16.0
 numpy>=1.24.0,<2.0.0
 scipy>=1.11.0
 
@@ -10,7 +11,8 @@ scipy>=1.11.0
 ultralytics>=8.0.146
 
 # Stage 2 — 2D Pose (RTMPose via ONNX Runtime)
-onnxruntime-gpu>=1.16.0     # swap to `onnxruntime` for CPU-only builds
+# onnxruntime-gpu installed separately in Dockerfile
+# onnxruntime-gpu>=1.16.0
 
 # Stage 3 — 3D Lifter (VideoPose3D uses PyTorch — already listed above)
 

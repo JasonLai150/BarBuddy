@@ -5,31 +5,30 @@ import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 
 export class BarBuddyStack extends Stack {
   public readonly bucket: s3.Bucket;
   public readonly jobsTable: dynamodb.Table;
   public readonly workerRepo: ecr.Repository;
+  public readonly jobQueue: sqs.Queue;
 
   public readonly apiLambdaRole: iam.Role;
-  public readonly ecsTaskRole: iam.Role;
-  public readonly ecsExecutionRole: iam.Role;
-  public readonly stepFunctionsRole: iam.Role;
+  public readonly ec2InstanceRole: iam.Role;
+  public readonly scaleTriggerLambdaRole: iam.Role;
 
   public readonly workerLogGroup: logs.LogGroup;
 
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    // S3 bucket for raw videos + intermediate work + results
+    // ── S3 bucket ────────────────────────────
     this.bucket = new s3.Bucket(this, "liftVideos", {
-      // You can replace this with an explicit name once you decide env naming
-      // bucketName: `pl-lifts-${this.account}-${this.region}`,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       enforceSSL: true,
       versioned: false,
-      removalPolicy: RemovalPolicy.DESTROY, // change to RETAIN for prod
-      autoDeleteObjects: true,              // remove for prod
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
       cors: [
         {
           allowedMethods: [
@@ -37,7 +36,7 @@ export class BarBuddyStack extends Stack {
             s3.HttpMethods.GET,
             s3.HttpMethods.HEAD,
           ],
-          allowedOrigins: ["*"], // tighten later to your app domains
+          allowedOrigins: ["*"],
           allowedHeaders: ["*"],
           exposedHeaders: ["ETag"],
           maxAge: 3000,
@@ -45,17 +44,16 @@ export class BarBuddyStack extends Stack {
       ],
     });
 
-    // DynamoDB table for job status + pointers to S3 artifacts
+    // ── DynamoDB ──────────────────────────────
     this.jobsTable = new dynamodb.Table(this, "LiftJobsTable", {
       tableName: "LiftJobs",
       partitionKey: { name: "jobId", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: RemovalPolicy.DESTROY, // change to RETAIN for prod
+      removalPolicy: RemovalPolicy.DESTROY,
       pointInTimeRecovery: true,
-      timeToLiveAttribute: "ttl", // optional: set TTL later for cleanup
+      timeToLiveAttribute: "ttl",
     });
 
-    // Optional but recommended: query by userId for “my jobs”
     this.jobsTable.addGlobalSecondaryIndex({
       indexName: "ByUser",
       partitionKey: { name: "userId", type: dynamodb.AttributeType.STRING },
@@ -63,10 +61,10 @@ export class BarBuddyStack extends Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // ECR repo for your worker container image (ffmpeg + YOLOv8 + RTMPose + VideoPose3D)
+    // ── ECR ──────────────────────────────────
     this.workerRepo = new ecr.Repository(this, "PoseWorkerRepo", {
       repositoryName: "pose-worker",
-      removalPolicy: RemovalPolicy.DESTROY, // change to RETAIN for prod
+      removalPolicy: RemovalPolicy.DESTROY,
       emptyOnDelete: true,
       imageScanOnPush: true,
     });
@@ -77,68 +75,74 @@ export class BarBuddyStack extends Stack {
 
     this.workerLogGroup = new logs.LogGroup(this, "PoseWorkerLogGroup", {
       logGroupName: "/ecs/pose-worker",
-      removalPolicy: RemovalPolicy.DESTROY, // RETAIN later for prod
+      removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    // ── SQS job queue ────────────────────────
+    const deadLetterQueue = new sqs.Queue(this, "JobDLQ", {
+      queueName: "barbuddy-jobs-dlq",
+      retentionPeriod: Duration.days(14),
+    });
+
+    this.jobQueue = new sqs.Queue(this, "JobQueue", {
+      queueName: "barbuddy-jobs",
+      visibilityTimeout: Duration.minutes(10),
+      receiveMessageWaitTime: Duration.seconds(20),
+      retentionPeriod: Duration.days(4),
+      deadLetterQueue: {
+        queue: deadLetterQueue,
+        maxReceiveCount: 3,
+      },
+    });
+
+    // ── IAM: API Lambda ──────────────────────
     this.apiLambdaRole = new iam.Role(this, "ApiLambdaRole", {
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
     });
-    // Basic Lambda logging
     this.apiLambdaRole.addManagedPolicy(
       iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")
     );
-    // DynamoDB access (jobs table)
     this.jobsTable.grantReadWriteData(this.apiLambdaRole);
-    // S3 access needed for presign + head checks
-    // (Presigning itself doesn't require permission, but validating existence does)
-    this.bucket.grantReadWrite(this.apiLambdaRole); // for HeadObject/GetObject if needed
-    // Start Step Functions executions (we’ll attach the actual ARN later)
-    // For now allow starting any state machine in this account/region.
-    // We'll tighten this once we create the state machine.
-    this.apiLambdaRole.addToPolicy(new iam.PolicyStatement({
-      actions: ["states:StartExecution"],
+    this.bucket.grantReadWrite(this.apiLambdaRole);
+    this.jobQueue.grantSendMessages(this.apiLambdaRole);
+
+    // ── IAM: EC2 instance role (worker) ──────
+    this.ec2InstanceRole = new iam.Role(this, "Ec2InstanceRole", {
+      assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
+    });
+    this.bucket.grantReadWrite(this.ec2InstanceRole);
+    this.jobsTable.grantReadWriteData(this.ec2InstanceRole);
+    this.jobQueue.grantConsumeMessages(this.ec2InstanceRole);
+    this.workerRepo.grantPull(this.ec2InstanceRole);
+    this.ec2InstanceRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["ecr:GetAuthorizationToken"],
       resources: ["*"],
     }));
-
-    this.ecsTaskRole = new iam.Role(this, "EcsTaskRole", {
-      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-    });
-    // Worker reads raw videos and writes results
-    this.bucket.grantReadWrite(this.ecsTaskRole);
-    // Worker updates job status + writes result pointers
-    this.jobsTable.grantReadWriteData(this.ecsTaskRole);
-
-
-    this.ecsExecutionRole = new iam.Role(this, "EcsExecutionRole", {
-      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-    });
-    this.ecsExecutionRole.addManagedPolicy(
-      iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AmazonECSTaskExecutionRolePolicy")
-    );
-    // Allow pulling from your specific ECR repo
-    this.workerRepo.grantPull(this.ecsExecutionRole);
-
-
-    this.stepFunctionsRole = new iam.Role(this, "StepFunctionsRole", {
-      assumedBy: new iam.ServicePrincipal("states.amazonaws.com"),
-    });
-    // Step Functions can run ECS tasks
-    this.stepFunctionsRole.addToPolicy(new iam.PolicyStatement({
+    this.ec2InstanceRole.addToPolicy(new iam.PolicyStatement({
       actions: [
-        "ecs:RunTask",
-        "ecs:StopTask",
-        "ecs:DescribeTasks",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams",
       ],
-      resources: ["*"], // tighten once we have cluster + task definition ARNs
+      resources: [this.workerLogGroup.logGroupArn + ":*"],
     }));
-    // Needed so Step Functions can attach the ECS task roles when running tasks
-    this.stepFunctionsRole.addToPolicy(new iam.PolicyStatement({
-      actions: ["iam:PassRole"],
-      resources: [
-        this.ecsTaskRole.roleArn,
-        this.ecsExecutionRole.roleArn,
-      ],
-    }));
+    this.ec2InstanceRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")
+    );
 
+    // ── IAM: Scale-trigger Lambda ────────────
+    this.scaleTriggerLambdaRole = new iam.Role(this, "ScaleTriggerLambdaRole", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+    });
+    this.scaleTriggerLambdaRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")
+    );
+    this.scaleTriggerLambdaRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        "autoscaling:SetDesiredCapacity",
+        "autoscaling:DescribeAutoScalingGroups",
+      ],
+      resources: ["*"],
+    }));
   }
 }
