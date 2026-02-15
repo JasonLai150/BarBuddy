@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 
 import boto3
 
+import cv2
+
 
 # ── Globals ────────────────────────────────────
 _shutdown_requested = False
@@ -81,6 +83,7 @@ def process_job(msg: dict, device: str):
     summary_key = results["summaryKey"]
     viz_key = results["vizKey"]
     meta_key = results.get("metaKey")
+    thumbnail_key = results.get("thumbnailKey")
 
     bucket = must_env("BUCKET_NAME")
     table = must_env("JOBS_TABLE_NAME")
@@ -123,9 +126,26 @@ def process_job(msg: dict, device: str):
     landmarks_local = os.path.join(outdir, "landmarks.json")
     summary_local = os.path.join(outdir, "summary.json")
     viz_local = os.path.join(outdir, "viz.mp4")
+    thumbnail_local = os.path.join(outdir, "thumbnail.jpg")
 
     print(f"📥 Downloading s3://{bucket}/{raw_key}")
     s3.download_file(bucket, raw_key, in_path)
+
+    # Phase 1: Extract frame 0 as early thumbnail and upload immediately
+    if thumbnail_key:
+        try:
+            cap = cv2.VideoCapture(in_path)
+            ret, frame = cap.read()
+            cap.release()
+            if ret and frame is not None:
+                cv2.imwrite(thumbnail_local, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                s3.upload_file(thumbnail_local, bucket, thumbnail_key,
+                               ExtraArgs={"ContentType": "image/jpeg"})
+                print(f"🖼️  Early thumbnail uploaded → s3://{bucket}/{thumbnail_key}")
+            else:
+                print("⚠️  Could not read frame 0 for early thumbnail")
+        except Exception as e:
+            print(f"⚠️  Early thumbnail failed (non-fatal): {e}")
 
     # Run the 3-stage pipeline
     cmd = [
@@ -145,6 +165,8 @@ def process_job(msg: dict, device: str):
     ]
     if viz:
         cmd += ["--viz", "--viz-fps", str(viz_fps)]
+    if thumbnail_key:
+        cmd += ["--thumbnail", thumbnail_local]
 
     subprocess.check_call(cmd)
 
@@ -183,6 +205,12 @@ def process_job(msg: dict, device: str):
             ContentType="application/json",
         )
 
+    # Phase 2: Upload annotated thumbnail (overwrites early thumbnail)
+    if thumbnail_key and os.path.exists(thumbnail_local):
+        s3.upload_file(thumbnail_local, bucket, thumbnail_key,
+                       ExtraArgs={"ContentType": "image/jpeg"})
+        print(f"🖼️  Annotated thumbnail uploaded → s3://{bucket}/{thumbnail_key}")
+
     # Update DynamoDB → DONE
     update_expr = "SET #s=:s, updatedAt=:u, resultLandmarksKey=:lk, resultSummaryKey=:sk"
     expr_vals = {
@@ -199,6 +227,10 @@ def process_job(msg: dict, device: str):
     if meta_key:
         update_expr += ", resultMetaKey=:mk"
         expr_vals[":mk"] = {"S": meta_key}
+
+    if thumbnail_key:
+        update_expr += ", resultThumbnailKey=:tk"
+        expr_vals[":tk"] = {"S": thumbnail_key}
 
     ddb.update_item(
         TableName=table,
@@ -320,6 +352,7 @@ def run_once(device: str):
             "summaryKey": must_env("RESULT_SUMMARY_KEY"),
             "vizKey": must_env("RESULT_VIZ_KEY"),
             "metaKey": os.environ.get("RESULT_META_KEY", "").strip() or None,
+            "thumbnailKey": os.environ.get("RESULT_THUMBNAIL_KEY", "").strip() or None,
         },
     }
     process_job(msg, device)

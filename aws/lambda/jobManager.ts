@@ -117,7 +117,7 @@ async function uploadUrl(event: any) {
   const resultLandmarksKey = `${resultsPrefix}landmarks.json`;
   const resultSummaryKey = `${resultsPrefix}summary.json`;
   const resultVizKey = `${resultsPrefix}viz.mp4`;
-
+  const resultThumbnailKey = `${resultsPrefix}thumbnail.jpg`;
 
   const now = new Date().toISOString();
 
@@ -133,6 +133,7 @@ async function uploadUrl(event: any) {
         resultLandmarksKey,
         resultSummaryKey,
         resultVizKey,
+        resultThumbnailKey,
         status: "CREATED",
         createdAt: now,
         updatedAt: now,
@@ -200,6 +201,7 @@ async function createJob(event: any) {
           landmarksKey: job.resultLandmarksKey,
           summaryKey: job.resultSummaryKey,
           vizKey: job.resultVizKey,
+          thumbnailKey: job.resultThumbnailKey,
         },
       }),
       MessageGroupId: undefined, // standard queue, not FIFO
@@ -236,7 +238,17 @@ async function getJob(event: any) {
   const { job, err } = await getJobOwned(jobId, userSub);
   if (err) return err;
 
-  return resp(200, job);
+  // Generate a presigned thumbnail URL if the key exists (available during processing)
+  let thumbnailUrl: string | null = null;
+  if (job.resultThumbnailKey) {
+    const getCmd = new GetObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: job.resultThumbnailKey,
+    });
+    thumbnailUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_GET_TTL_SECONDS });
+  }
+
+  return resp(200, { ...job, thumbnailUrl });
 }
 
 async function getJobsList(event: any) {
@@ -266,7 +278,7 @@ async function getJobsList(event: any) {
         ScanIndexForward: false, // newest first
         Limit: pageSize,
         ExclusiveStartKey: exclusiveStartKey,
-        ProjectionExpression: "jobId, userId, liftType, #s, createdAt, updatedAt, resultMetaKey, resultLandmarksKey, resultSummaryKey, resultVizKey",
+        ProjectionExpression: "jobId, userId, liftType, #s, createdAt, updatedAt, resultMetaKey, resultLandmarksKey, resultSummaryKey, resultVizKey, resultThumbnailKey",
         ExpressionAttributeNames: { "#s": "status" },
       })
     );
@@ -276,18 +288,33 @@ async function getJobsList(event: any) {
       (queryResult.Items ?? []).map((item: any) => expireIfStale(item))
     );
 
-    const jobs = checkedItems.map((item: any) => ({
-      jobId: item.jobId,
-      userId: item.userId,
-      liftType: item.liftType ?? null,
-      status: item.status ?? null,
-      createdAt: item.createdAt ?? null,
-      updatedAt: item.updatedAt ?? null,
-      resultMetaKey: item.resultMetaKey ?? null,
-      resultLandmarksKey: item.resultLandmarksKey ?? null,
-      resultSummaryKey: item.resultSummaryKey ?? null,
-      resultVizKey: item.resultVizKey ?? null,
-    }));
+    // Generate presigned thumbnail URLs for all jobs that have one
+    const jobs = await Promise.all(
+      checkedItems.map(async (item: any) => {
+        let thumbnailUrl: string | null = null;
+        if (item.resultThumbnailKey) {
+          const getCmd = new GetObjectCommand({
+            Bucket: BUCKET_NAME,
+            Key: item.resultThumbnailKey,
+          });
+          thumbnailUrl = await getSignedUrl(s3, getCmd, { expiresIn: PRESIGN_GET_TTL_SECONDS });
+        }
+        return {
+          jobId: item.jobId,
+          userId: item.userId,
+          liftType: item.liftType ?? null,
+          status: item.status ?? null,
+          createdAt: item.createdAt ?? null,
+          updatedAt: item.updatedAt ?? null,
+          resultMetaKey: item.resultMetaKey ?? null,
+          resultLandmarksKey: item.resultLandmarksKey ?? null,
+          resultSummaryKey: item.resultSummaryKey ?? null,
+          resultVizKey: item.resultVizKey ?? null,
+          resultThumbnailKey: item.resultThumbnailKey ?? null,
+          thumbnailUrl,
+        };
+      })
+    );
 
     let newNextToken: string | undefined;
     if (queryResult.LastEvaluatedKey) {
@@ -333,6 +360,7 @@ async function getJobResults(event: any) {
     { name: "landmarks", key: job.resultLandmarksKey },
     { name: "summary", key: job.resultSummaryKey },
     { name: "viz", key: job.resultVizKey },
+    { name: "thumbnail", key: job.resultThumbnailKey },
   ];
 
   const urls: Array<{ name: string; key: string; url: string }> = [];

@@ -167,6 +167,10 @@ def main():
     ap.add_argument("--viz", action="store_true")
     ap.add_argument("--viz-fps", type=int, default=24)
 
+    # Thumbnail
+    ap.add_argument("--thumbnail", default=None,
+                    help="Output path for annotated thumbnail JPEG")
+
     args = ap.parse_args()
 
     # ---- Auto-detect device ----
@@ -383,6 +387,67 @@ def main():
             rep_count=rep_metrics["reps"],
         )
         print(f"  Wrote: {viz_path}")
+
+    # Annotated thumbnail (optional)
+    if args.thumbnail:
+        print(f"\n[THUMBNAIL] Generating annotated thumbnail …")
+        per_frame_valid = rep_metrics.get("perFrameValid") or []
+        highlight_segs = LIFT_HIGHLIGHT_SEGMENTS.get(args.lift_type)
+
+        # Pick the best frame: first valid frame, or highest-confidence fallback
+        thumb_idx = None
+        for i in range(n_frames):
+            if i < len(per_frame_valid) and per_frame_valid[i]:
+                thumb_idx = i
+                break
+
+        if thumb_idx is None:
+            # Fallback: highest confidence frame
+            best_conf = -1.0
+            for i in range(min(n_frames, len(frames_3d_smooth))):
+                conf = frames_3d_smooth[i].get("confidence", 0.0)
+                if conf > best_conf:
+                    best_conf = conf
+                    thumb_idx = i
+
+        if thumb_idx is None:
+            thumb_idx = 0
+
+        thumb_frame_path = frame_paths[thumb_idx] if thumb_idx < len(frame_paths) else None
+        if thumb_frame_path:
+            thumb_img = cv2.imread(thumb_frame_path)
+            if thumb_img is not None:
+                is_valid = (
+                    thumb_idx < len(per_frame_valid) and per_frame_valid[thumb_idx]
+                )
+                lms = (
+                    frames_3d_smooth[thumb_idx].get("landmarks")
+                    if thumb_idx < len(frames_3d_smooth)
+                    else None
+                )
+                draw_skeleton_on_frame(
+                    thumb_img, lms, COCO_SKELETON,
+                    conf_threshold=0.3,
+                    highlight_segments=highlight_segs,
+                    is_valid=is_valid,
+                )
+                if is_valid:
+                    h_img, w_img = thumb_img.shape[:2]
+                    cv2.putText(
+                        thumb_img, "VALID",
+                        (10, h_img - 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                        (0, 255, 0), 2,
+                    )
+                os.makedirs(os.path.dirname(args.thumbnail) or ".", exist_ok=True)
+                cv2.imwrite(args.thumbnail, thumb_img,
+                            [cv2.IMWRITE_JPEG_QUALITY, 85])
+                print(f"  Wrote: {args.thumbnail} (frame {thumb_idx}, "
+                      f"valid={is_valid})")
+            else:
+                print(f"  ⚠ Could not read frame {thumb_idx} for thumbnail")
+        else:
+            print(f"  ⚠ No frame available for thumbnail")
 
     # summary.json — compact results for frontend
     summary = {
